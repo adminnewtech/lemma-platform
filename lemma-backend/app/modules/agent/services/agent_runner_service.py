@@ -60,6 +60,7 @@ from app.modules.agent.services.run_phase_spans import (
     run_phase,
 )
 from app.modules.agent.services.runtime_history import (
+    MAX_HISTORY_AGENT_RUNS,
     bound_runtime_history,
     runtime_full_run_ids,
     select_runtime_history,
@@ -72,6 +73,8 @@ from app.modules.agent.services.run_finalizer import (
     RunFinalizer,
     finalize_safely,
     run_failure_message,
+    run_failure_code,
+    run_failure_reason,
 )
 from app.modules.agent.services.run_observer_delivery import (
     notify_run_failed,
@@ -378,11 +381,7 @@ class AgentRunnerService:
                             )
         except BaseException as exc:
             if is_usage_limit_error(exc):
-                # Not a crash: the organisation is out of plan quota. This was
-                # the single most common "error" in production (154 in a week),
-                # logged at ERROR with a stack trace and shown to the user as
-                # "check the agent runtime configuration" — which sent people
-                # debugging a system that was working exactly as designed.
+                # Exhaustion is an expected policy outcome, not a runtime crash.
                 logger.warning(
                     "agent.agent_runner_service.agent_run_quota_exhausted.degraded",
                     agent_run_id=agent_run_id,
@@ -436,6 +435,8 @@ class AgentRunnerService:
                             run=identity,
                             status=AgentRunStatus.FAILED,
                             error=run_failure_message(exc),
+                            error_code=run_failure_code(exc),
+                            error_reason=run_failure_reason(exc),
                         ),
                         agent_run_id=agent_run_id,
                     )
@@ -527,8 +528,14 @@ class AgentRunnerService:
         with run_phase("load_context") as span:
             async with self.uow_factory() as uow:
                 repo = ConversationRepository(uow)
-                runs = await repo.load_runtime_history_digests_by_run_id(agent_run_id)
-                agent_run = self._find_agent_run(runs, agent_run_id)
+                window = await repo.load_runtime_history_digests_by_run_id(
+                    agent_run_id, limit=MAX_HISTORY_AGENT_RUNS
+                )
+                runs = window.runs
+                # In the window or not -- see `RuntimeHistoryWindow`.
+                agent_run = window.current_run
+                if agent_run is None:
+                    raise ConversationNotFoundError()
                 conversation = validate_conversation_access(
                     await repo.get_conversation(agent_run.conversation_id),
                     user_id=user_id,
@@ -545,22 +552,17 @@ class AgentRunnerService:
                 # runs before the messages are asked for, and only what survives
                 # it gets them. Attaching to the untrimmed list meant a long
                 # conversation read hundreds of runs it then discarded.
-                bounded, dropped_runs = bound_runtime_history(runs, conversation)
+                bounded, dropped_runs = bound_runtime_history(
+                    runs, conversation, total_runs=window.total_runs
+                )
                 await repo.attach_runtime_history_messages(
                     bounded, full_run_ids=runtime_full_run_ids(bounded, conversation)
                 )
-                agent_run = self._find_agent_run(runs, agent_run_id)
                 messages = self._select_runtime_history(
                     bounded, conversation, already_dropped=dropped_runs
                 )
                 record_history_size(span, runs=runs, sent=messages)
                 return conversation, agent, agent_run, messages
-
-    def _find_agent_run(self, runs: list[AgentRun], agent_run_id: UUID) -> AgentRun:
-        for run in runs:
-            if run.id == agent_run_id:
-                return run
-        raise ConversationNotFoundError()
 
     def _select_runtime_history(
         self,

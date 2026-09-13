@@ -47,17 +47,37 @@ pytestmark = pytest.mark.e2e
 @pytest.fixture(scope="session", autouse=True)
 def hermetic_datastore_runtime():
     """Avoid model-network dependencies in routine datastore E2E tests."""
-    previous_layout = datastore_settings.document_processing_layout_enabled
     embedder = DeterministicTestEmbedder(settings.embedding_dimension)
     previous_composition = install_datastore_composition(
         DatastoreComposition(embedder_provider=lambda: embedder)
     )
-    datastore_settings.document_processing_layout_enabled = False
     try:
         yield
     finally:
         install_datastore_composition(previous_composition)
-        datastore_settings.document_processing_layout_enabled = previous_layout
+
+
+@pytest.fixture(autouse=True)
+def _layout_disabled_for_this_test():
+    """Keep document layout analysis off for datastore E2E, per test.
+
+    `datastore_settings` is a process-wide singleton, so this is deliberately
+    function-scoped rather than folded into the session fixture above. A
+    session-scoped teardown runs at the end of the whole *run*, not at the end of
+    this directory — so setting the flag there left it False for every test that
+    happened to be collected afterwards, and the unit tests that assert the
+    layout half of the Kreuzberg config failed on a value an E2E fixture had
+    flipped underneath them. Directory-scoped autouse gives the flag exactly the
+    lifetime it was meant to have. (`scope="package"` would express this too, but
+    these test directories have no `__init__.py`, so pytest does not treat them
+    as packages and the teardown never fires.)
+    """
+    previous = datastore_settings.document_processing_layout_enabled
+    datastore_settings.document_processing_layout_enabled = False
+    try:
+        yield
+    finally:
+        datastore_settings.document_processing_layout_enabled = previous
 
 
 # Use the base session settings unchanged. Kreuzberg is NOT wired in here: it is
@@ -78,6 +98,7 @@ db_manager = e2e_fixtures.db_manager
 test_app = e2e_fixtures.test_app
 db_session = e2e_fixtures.db_session
 async_client = e2e_fixtures.async_client
+e2e_process_clients = e2e_fixtures.e2e_process_clients
 fixed_test_user = e2e_fixtures.fixed_test_user
 authenticated_client = e2e_fixtures.authenticated_client
 fixed_test_org = e2e_fixtures.fixed_test_org
@@ -274,6 +295,7 @@ __all__ = [
     "authenticated_client",
     "db_manager",
     "db_session",
+    "e2e_process_clients",
     "document_worker",
     "e2e_settings",
     "fixed_test_org",

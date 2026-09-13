@@ -74,7 +74,33 @@ class FunctionRepositoryPort(Protocol):
         raise NotImplementedError
 
     @abstractmethod
+    async def find_revisions_by_hash_prefix(
+        self, function_id: UUID, prefix: str
+    ) -> list[FunctionRevisionEntity]:
+        """The best revision of each distinct hash the prefix names, max two.
+
+        Two is enough to answer "which revision" and "is it ambiguous" at once,
+        and bounds the read: resolving a ref must not cost the function's whole
+        build history.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     async def list_revisions(self, function_id: UUID) -> list[FunctionRevisionEntity]:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def page_revisions(
+        self, function_id: UUID, *, limit: int, cursor: UUID | None
+    ) -> tuple[list[FunctionRevisionEntity], UUID | None]:
+        """One page of a function's history, newest first, plus the next cursor."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def list_unpurged_revisions(
+        self, function_id: UUID
+    ) -> list[FunctionRevisionEntity]:
+        """The revisions retention can still act on: everything not yet purged."""
         raise NotImplementedError
 
     @abstractmethod
@@ -142,6 +168,13 @@ class FunctionStoragePort(FunctionStorageDeletionPort, Protocol):
     async def read_bytes(self, path: str) -> bytes: ...
 
     async def write_file(self, path: str, content: bytes | str) -> None: ...
+
+    async def list_prefix(self, prefix: str) -> tuple[str, ...]:
+        """Paths under ``prefix``, in whatever order the store yields them.
+
+        The one caller is the runtime gateway locating a staged artifact whose
+        generation it was not told, under `FunctionArtifact.STAGED_PREFIX`.
+        """
 
 
 class FunctionStorageFactoryPort(Protocol):

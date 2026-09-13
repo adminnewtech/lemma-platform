@@ -7,6 +7,9 @@ from pydantic import TypeAdapter
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.modules.agent_surfaces.platforms.common import (
+    PLATFORM_TRANSPORT_ERRORS,
+)
 from app.modules.agent_surfaces.services.surface_configuration import (
     SurfaceConfigurationMixin,
 )
@@ -25,6 +28,7 @@ from app.modules.agent_surfaces.services.surface_ingress_credentials import (
     SurfaceIngressCredentialMixin,
 )
 from app.modules.agent_surfaces.services.surface_inbound import SurfaceInboundMixin
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceIngressRequest,
@@ -90,7 +94,7 @@ class AgentSurfaceIngressService(
     def __init__(
         self,
         *,
-        uow=None,
+        uow: SqlAlchemyUnitOfWork | None = None,
         uow_factory: UnitOfWorkFactory | None = None,
         surface_repository: SurfaceInstallationRepositoryPort | None = None,
         conversation_link_repository: SurfaceConversationLinkRepository | None = None,
@@ -200,6 +204,7 @@ class AgentSurfaceIngressService(
                 adapter=adapter,
                 context=parsed_context,
                 credentials=credentials,
+                event_dedup_store=self.event_dedup_store,
             )
             return
 
@@ -219,7 +224,7 @@ class AgentSurfaceIngressService(
             uow=self.uow,
         ):
             return
-        with suppress(Exception):
+        with suppress(*PLATFORM_TRANSPORT_ERRORS):
             await adapter.add_processing_indicator(
                 credentials=credentials,
                 event=context.event,

@@ -37,7 +37,7 @@ dependencies = [
   # — an unbounded floor lets a `pip install lemma-cli` a year from now resolve
   # a CLI against an SDK nobody ever ran it with. The release workflow rewrites
   # both halves on every tagged build.
-  "lemma-sdk>=0.7.2,<0.8",
+  "lemma-sdk>=0.8.0,<0.9",
   "click>=8.3.0",
   "typer>=0.12.5",
   "rich>=13.9.4",
@@ -74,7 +74,7 @@ dev = [
   # this tree is clean today and reports 264 findings under 0.16. That would
   # have landed on whoever next refreshed the lockfile, in a PR about something
   # else. Lift the bound for all three components together.
-  "ruff>=0.14.8,<0.16",
+  "ruff>=0.14.8,<0.17",
   # e2e test infra: the e2e suite spins up the real backend (subprocess uvicorn
   # + docker postgres/redis/supertokens) and drives the CLI against it over TCP.
   # httpx provisions test users/orgs/pods over HTTP; psycopg truncates the

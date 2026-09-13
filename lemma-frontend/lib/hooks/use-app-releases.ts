@@ -15,7 +15,12 @@ export interface AppRelease {
     has_source: boolean;
     /** Set once retention removed this release's build. */
     pruned_at?: string | null;
-    preview_url: string;
+    /**
+     * Null on a stack that serves no app host of its own — Desktop, or a tunnel
+     * sharing one origin. There is nowhere to preview a release there, so the
+     * caller must check this rather than assume a URL.
+     */
+    preview_url: string | null;
 }
 
 export const appReleasesQueryKey = (podId: string, appName: string) =>
@@ -26,10 +31,14 @@ export function useAppReleases(podId: string, appName: string | null, enabled = 
         queryKey: appReleasesQueryKey(podId, appName ?? ''),
         enabled: Boolean(podId && appName) && enabled,
         queryFn: async (): Promise<AppRelease[]> => {
-            const response = await getLemmaClient(podId).apps.releases(appName as string) as {
-                items?: AppRelease[];
-            };
-            return Array.isArray(response?.items) ? response.items : [];
+            // Paged to exhaustion. The endpoint answers 50 by default and
+            // retention keeps a pruned release's row, so an app deployed daily
+            // has history past the first page -- and because the live release
+            // is never pruned, a long-lived one can itself be on a later page.
+            // Reading only `items` would hide it from the picker below.
+            return (await getLemmaClient(podId).apps.allReleases(
+                appName as string,
+            )) as AppRelease[];
         },
     });
 }

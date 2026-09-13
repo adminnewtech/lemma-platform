@@ -495,14 +495,6 @@ class Settings(BaseSettings):
             "disable delegation revocation."
         ),
     )
-    # Google OAuth Settings
-    google_client_id: Optional[str] = Field(
-        default=None, description="Google OAuth Client ID"
-    )
-    google_client_secret: Optional[SecretStr] = Field(
-        default=None, description="Google OAuth Client Secret"
-    )
-
     # WhatsApp Business API Settings
 
     # Telegram Bot Settings
@@ -549,7 +541,18 @@ class Settings(BaseSettings):
             "(projects/…/secrets/…) used when secret_key_provider=gcp_secret_manager."
         ),
     )
-    # Email Settings
+    # Email. Deliberately in core rather than a module, and shared three ways:
+    # `app/core/email/` sends it, `mod:identity` renders verification and
+    # password-reset mail through that sender, and `mod:schedule` sends the
+    # "your schedule was deactivated" notice through the same one. The Resend
+    # half is shared further still -- `RESEND_API_KEY` is documented in
+    # `docs/configuration.md` as shared with agent surfaces, which mint agent
+    # mailboxes on it.
+    #
+    # So no module owns this. Identity taking it would make `schedule ->
+    # identity` a transport dependency, and splitting the provider's config
+    # across two classes is what `agent_surfaces/config.py` records as having
+    # produced two API keys and two answers to "which domain do we send from".
     smtp_host: str = Field(default="smtp.gmail.com", description="SMTP server hostname")
     smtp_port: int = Field(default=587, description="SMTP server port")
     smtp_user: Optional[str] = Field(default=None, description="SMTP username")
@@ -594,9 +597,8 @@ class Settings(BaseSettings):
             "is correct when one endpoint carries both event types."
         ),
     )
-    # No default. A fallback sender is not configuration: it makes an
-    # unconfigured deployment send password resets from a domain it may not own,
-    # which fails DMARC silently and locks people out with no error anywhere.
+    # Required alongside RESEND_API_KEY, and no default is possible: Resend only
+    # accepts a sender on a domain verified for that account.
     resend_from_email: Optional[str] = Field(
         default=None,
         description="Sender address used with the Resend SMTP relay",
@@ -1139,11 +1141,17 @@ class Settings(BaseSettings):
             "cold download. Env: ``LOCAL_EMBEDDING_CACHE_DIR``."
         ),
     )
-    # Stays in core, alone among the workflow settings. `mod:agent_surfaces`
-    # reads it to size a human-wait ceiling, and `agent_surfaces -> workflow`
-    # is a forbidden import -- so moving it to `WorkflowSettings` would have
-    # bought one module's ownership with a dependency the architecture gate
-    # refuses. Shared setting, shared home.
+    # Stays in core, alone among the workflow settings, because two modules
+    # read it: `mod:workflow` for its own sweep and `mod:agent_surfaces` to size
+    # a human-wait ceiling from the same number.
+    #
+    # An earlier version of this comment said the alternative was "a dependency
+    # the architecture gate refuses". That was wrong and is corrected here:
+    # `check_architecture.py` permits `app.modules.<x>.contracts` imports, and
+    # `schedule/module.py` already imports `workflow.contracts.timers`, so a
+    # contracts-exposed accessor would be legal. The reason is cohesion, not
+    # the gate -- one number meaning "how long we wait on a person" should not
+    # become a cross-module call to read.
     workflow_wait_max_age_seconds: float = Field(
         default=6 * 60 * 60.0,
         description=(
@@ -1237,15 +1245,6 @@ class Settings(BaseSettings):
             return "openai_compat"
         return "local"
 
-    def is_google_oauth_configured(self) -> bool:
-        """Check if Google OAuth is properly configured."""
-        return all(
-            [
-                self.google_client_id,
-                self.google_client_secret,
-            ]
-        )
-
     def is_email_configured(self) -> bool:
         """Check if email is properly configured."""
         explicit_smtp = all(
@@ -1256,7 +1255,8 @@ class Settings(BaseSettings):
                 self.smtp_from_email,
             ]
         )
-        return bool(explicit_smtp or reveal_secret(self.resend_api_key))
+        resend = reveal_secret(self.resend_api_key) and self.resend_from_email
+        return bool(explicit_smtp or resend)
 
     def resolve_browser_sdk_path(self) -> Optional[Path]:
         """Locate the built browser SDK bundle served to no-build apps.

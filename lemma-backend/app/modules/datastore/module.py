@@ -139,6 +139,9 @@ def _routers():
     from app.modules.datastore.api.controllers.query_controller import router as query
     from app.modules.datastore.api.controllers.table_controller import router as table
     from app.modules.datastore.api.controllers.file_controller import router as file
+    from app.modules.datastore.api.controllers.signed_link_controller import (
+        router as signed_link,
+    )
     from app.modules.datastore.api.controllers.public_file_controller import (
         router as public_file,
     )
@@ -149,7 +152,10 @@ def _routers():
         router as changes,
     )
 
-    return [record, query, table, file, public_file, signed_file, changes]
+    # `signed_link` before `file`, and the order is load-bearing: routes match
+    # in registration order, and `file` owns `/files/{file_id}` — which happily
+    # matches `/files/signed-urls` and then fails parsing it as a UUID.
+    return [record, query, table, signed_link, file, public_file, signed_file, changes]
 
 
 def _event_routers():
@@ -220,6 +226,30 @@ async def _datastore_outbox_dispatcher(context):
 
 
 @asynccontextmanager
+async def _close_datastore_engine(context):
+    """Dispose this module's own engine when the worker stops.
+
+    It used to be a function-local import and a call at the end of
+    `streaq_runtime`'s shutdown, which is one of the two things core did that
+    made it import a module. The module owns the engine, so the module closes
+    it.
+
+    Registered *first* on purpose. `AsyncExitStack` unwinds last-entered-first,
+    so entering this one first makes it the last of datastore's to unwind --
+    after `_close_reindex_queue` and the outbox dispatcher, both of which can
+    still want the engine on their way out.
+    """
+    try:
+        yield
+    finally:
+        from app.modules.datastore.infrastructure.session import (
+            close_datastore_engine,
+        )
+
+        await close_datastore_engine()
+
+
+@asynccontextmanager
 async def _close_reindex_queue(context):
     try:
         yield
@@ -231,12 +261,51 @@ async def _close_reindex_queue(context):
         await close_datastore_reindex_queue()
 
 
+def _resource_names():
+    """How this module's resources are addressed by name in a grant.
+
+    A thunk so the ORM import happens at assembly rather than whenever the
+    module registry is imported. `app/core/authorization/resource_names.py`
+    used to hold this table for every module at once.
+    """
+    from app.core.authorization.context import ResourceType
+    from app.core.authorization.resource_names import ResourceNameTable
+    from app.modules.datastore.infrastructure.models.datastore_models import (
+        DatastoreFile,
+        DatastoreTable,
+    )
+
+    return (
+        (
+            ResourceType.DATASTORE_TABLE,
+            ResourceNameTable(
+                DatastoreTable.id, DatastoreTable.pod_id, DatastoreTable.table_name
+            ),
+        ),
+        # `FOLDER` and `DOCUMENT` are the same rows, addressed by path.
+        (
+            ResourceType.FOLDER,
+            ResourceNameTable(
+                DatastoreFile.id, DatastoreFile.pod_id, DatastoreFile.path
+            ),
+        ),
+        (
+            ResourceType.DOCUMENT,
+            ResourceNameTable(
+                DatastoreFile.id, DatastoreFile.pod_id, DatastoreFile.path
+            ),
+        ),
+    )
+
+
 module = LemmaModule(
     name="datastore",
+    resource_names=_resource_names,
     routers=_routers,
     event_routers=_event_routers,
     api_lifespans=(_preload_local_embeddings, _backfill_query_role),
     worker_lifespans=(
+        _close_datastore_engine,
         _preload_local_embeddings,
         _datastore_outbox_dispatcher,
         _close_reindex_queue,

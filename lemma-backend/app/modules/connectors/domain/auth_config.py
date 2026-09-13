@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import enum
-from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import model_validator
 
 from app.core.domain.entity import Entity
 from app.modules.connectors.domain.errors import ConnectorValidationError
@@ -13,7 +12,6 @@ from app.modules.connectors.domain.connector import (
     AuthProvider,
     ConnectorKind,
     kind_to_provider,
-    provider_to_kind,
 )
 
 
@@ -54,7 +52,7 @@ class AuthConfigEntity(Entity):
 
     organization_id: UUID
     connector_id: str
-    kind: ConnectorKind = ConnectorKind.PACKAGE
+    kind: ConnectorKind = ConnectorKind.HTTP
     config_source: AuthConfigSource = AuthConfigSource.SYSTEM_DEFAULT
     status: AuthConfigStatus = AuthConfigStatus.ACTIVE
     name: str
@@ -63,10 +61,6 @@ class AuthConfigEntity(Entity):
     metadata: dict[str, Any] | None = None
     created_by_user_id: UUID | None = None
     updated_by_user_id: UUID | None = None
-
-    model_config = ConfigDict(from_attributes=True)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @model_validator(mode="before")
     @classmethod
@@ -80,8 +74,6 @@ class AuthConfigEntity(Entity):
         """
         if not isinstance(data, dict):
             return data
-        if data.get("kind") is None and data.get("provider") is not None:
-            data = {**data, "kind": provider_to_kind(data["provider"])}
         if data.get("config") is None and data.get("provider_config") is not None:
             data = {**data, "config": data["provider_config"]}
         return data

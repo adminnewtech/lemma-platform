@@ -109,6 +109,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/organizations/{organization_id}/connector-operations` | `connector.operation.search` | Search Connector Operations Across Installs |
 | GET | `/organizations/{organization_id}/connectors/accounts` | `connector.account.list` | List Accounts |
 | GET | `/organizations/{organization_id}/connectors/accounts/{account_id}` | `connector.account.get` | Get Account |
+| GET | `/organizations/{organization_id}/connectors/accounts/{account_id}/github/installations` | `connector.account.installations` | Account Installations |
 | GET | `/organizations/{organization_id}/connectors/auth-configs` | `connector.auth_config.list` | List Auth Configs |
 | GET | `/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}` | `connector.auth_config.get` | Get Auth Config |
 | GET | `/organizations/{organization_id}/connectors/status` | `connector.status.get` | Get Connector Status |
@@ -119,9 +120,11 @@ run `uv run python scripts/generate_route_inventory.py`.
 | PATCH | `/organizations/{organization_id}/connectors/accounts/{account_id}` | `connector.account.update` | Update Account |
 | PATCH | `/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}` | `connector.auth_config.update` | Update Auth Config |
 | POST | `/organizations/{organization_id}/connectors/accounts` | `connector.account.create` | Create Account |
+| POST | `/organizations/{organization_id}/connectors/accounts/{account_id}/github/installations` | `connector.account.bind_installation` | Bind Account Installation |
 | POST | `/organizations/{organization_id}/connectors/auth-configs` | `connector.auth_config.create` | Create Auth Config |
 | POST | `/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}/operations/refresh` | `connector.auth_config.refresh_operations` | Refresh Auth Config Operations |
 | POST | `/organizations/{organization_id}/connectors/connect-requests` | `connector.connect_request.create` | Initiate Connect Request |
+| POST | `/organizations/{organization_id}/connectors/connect-requests/install` | `connector.connect_request.install` | Start Install Step |
 | POST | `/organizations/{organization_id}/connectors/{auth_config_name}/operations/details` | `connector.operation.details.batch` | Get Connector Operation Details In Batch |
 | POST | `/organizations/{organization_id}/connectors/{auth_config_name}/operations/{operation_name}/execute` | `connector.operation.execute` | Execute Connector Operation |
 
@@ -131,6 +134,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | --- | --- | --- | --- |
 | DELETE | `/pods/{pod_id}/datastore/files/by-path` | `file.delete` | Delete File Or Folder |
 | DELETE | `/pods/{pod_id}/datastore/files/by-path/markdown` | `file.markdown.detach` | Detach Document Markdown |
+| DELETE | `/pods/{pod_id}/datastore/files/signed-urls/{code}` | `file.signed_url.revoke` | Revoke a public signed URL |
 | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}` | `table.delete` | Delete Table |
 | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}/columns/{column_name}` | `table.column.remove` | Remove Column |
 | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}/records/{record_id}` | `record.delete` | Delete Record |
@@ -139,6 +143,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/datastore/files/children` | `file.children.list` | List a document's derived child files |
 | GET | `/pods/{pod_id}/datastore/files/children/content` | `file.child.get` | Fetch a document's child artifact by path |
 | GET | `/pods/{pod_id}/datastore/files/download` | `file.download` | Download File |
+| GET | `/pods/{pod_id}/datastore/files/signed-urls` | `file.signed_url.list` | List this pod's public signed URLs |
 | GET | `/pods/{pod_id}/datastore/files/tree` | `file.tree` | Get Directory Tree |
 | GET | `/pods/{pod_id}/datastore/files/url` | `file.url` | Get a short-lived URL for a file |
 | GET | `/pods/{pod_id}/datastore/files/{file_id}` | `file.get_by_id` | Get File by ID |
@@ -282,6 +287,10 @@ run `uv run python scripts/generate_route_inventory.py`.
 
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
+| GET | `/usage/me/events` | `usage.me.events.list` | My Events |
+| GET | `/usage/me/limits` | `usage.me.limits.get` | My Limits |
+| GET | `/usage/me/stats` | `usage.me.stats.get` | My Stats |
+| GET | `/usage/me/summary` | `usage.me.summary.get` | My Summary |
 | GET | `/usage/organizations/{organization_id}/events` | `usage.organization.events.list` | List Usage Events |
 | GET | `/usage/organizations/{organization_id}/limits` | `usage.organization.limits.get` | Get Usage Limits |
 | GET | `/usage/organizations/{organization_id}/me` | `usage.organization.me.summary.get` | Get My Usage |

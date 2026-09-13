@@ -35,7 +35,6 @@ The repository does not use submodules. Backend code depends on sibling packages
 | `../lemma-pod-bundle/` | The pod bundle format, shared with the CLI |
 | `../lemma-typescript/` | TypeScript SDK used by apps |
 | `../lemma-skills/` | Built-in agent skills loaded by the backend and workspace containers |
-| `lemma-connectors/` | Backend-local editable Python connector package |
 | `sandbox_runtime/` | The runtime inside sandbox images, and its protocol |
 | `sandbox-images/` | Dockerfiles and templates for the sandbox images |
 
@@ -73,9 +72,9 @@ lemma servers select local-dev
 lemma auth login
 ```
 
-### Run API / worker / scheduler separately (prod topology)
+### Run API and worker separately (prod topology)
 
-Production runs the API and the worker as **separate** processes (and the scheduler as a third). To mirror that locally, start infra, then run each process yourself from `lemma-backend/`:
+Production runs the API and the worker as **two** processes. There is no third scheduler process — time triggers are streaq crons on the worker's lanes. To mirror the split locally, start infra, then run each process yourself from `lemma-backend/`:
 
 ```bash
 docker compose up -d                  # infra: postgres, redis, supertokens
@@ -84,14 +83,12 @@ uv run alembic upgrade head           # apply migrations
 # API only
 uv run uvicorn app.app:app --host 0.0.0.0 --port 8000 --reload
 
-# streaq worker — agent runs, file (re)indexing, surface ingest, datastore cleanup tasks
+# streaq worker — agent runs, file (re)indexing, surface ingest, datastore
+# cleanup, and every cron/time/webhook schedule
 uv run python -m app.worker
-
-# scheduler — cron / time / webhook schedules
-uv run python -m app.scheduler
 ```
 
-A Dockerized, resource-capped version of this split (api + worker as separate 1-CPU/2-GB containers) lives in the load-test compose — see [Load testing](#load-testing).
+Two Dockerized versions of this split exist: `deploy/compose/` is the real self-hosted deployment (see [self-hosting](../docs/self-hosting.md)), and the load-test compose is a resource-capped copy for measurement — see [Load testing](#load-testing).
 
 ## Testing
 
@@ -134,8 +131,14 @@ Uses the **real model** (`LEMMA_OPENAI_API_KEY`) + the **real Docker sandbox**, 
 
 ```bash
 make test-e2e-real      # all e2e against the real model + Docker sandbox
-make test-e2e-runtime   # only the slow/worker/workspace/provider/local_cli subset
+make test-e2e-runtime   # exactly what backend-protected-e2e.yml runs
 ```
+
+`test-e2e-runtime` is byte-identical to the protected workflow, asserted by
+`test_the_protected_lane_can_be_reproduced_from_the_makefile`. It selects the
+slow/workspace/indexing subset and deliberately not `local_cli` (needs a
+cargo-built Agent Host; `make desktop-agent-host-e2e` supplies it) or
+`benchmark` (wall-clock budgets; `make benchmark-functions-docker` owns them).
 
 ### Markers & modes
 
@@ -187,9 +190,11 @@ New ORM models must be imported in `migrations/env.py` before autogenerate can d
 The connector catalog (apps, operations, and triggers) is managed via
 [`scripts/import_connector_catalog.py`](scripts/import_connector_catalog.py).
 
-- **Native (Lemma) apps** are always imported — those in `scripts/lemma_apps_config.json`
-  (Slack, Jira, Confluence) and the `lemma-connectors` package (Gmail, Google
-  Calendar, Google Drive, …).
+- **Native (Lemma) apps** are always imported — every entry in
+  `scripts/lemma_apps_config.json`. Those with curated `static_operations`
+  (GitHub, Slack, Gmail) run as `http`-kind connectors against the provider's
+  own OpenAPI description; the operation sets are regenerated offline by
+  `scripts/generate_*_static_operations.py` from the specs in `openapi_specs/`.
 - **Composio apps** are imported only when `COMPOSIO_API_KEY` is set (skipped
   gracefully otherwise).
 

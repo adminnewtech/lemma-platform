@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
@@ -125,8 +125,13 @@ class SurfaceInstallationRepositoryPort(Protocol):
         limit: int = 100,
     ) -> tuple[list[AgentSurfaceEntity], UUID | None]: ...
 
-    async def list_active_by_type(
-        self, surface_type: str
+    async def list_active_for_routing(
+        self,
+        surface_type: str,
+        *,
+        surface_ids: Collection[UUID] | None = None,
+        external_workspace_id: str | None = None,
+        system_credentials_only: bool = False,
     ) -> list[AgentSurfaceEntity]: ...
 
     async def list_active_native_receiver_surfaces(
@@ -400,6 +405,21 @@ class SurfaceEventDedupStorePort(Protocol):
         external_thread_id: str | None,
         external_message_id: str | None,
     ) -> bool: ...
+
+    async def claim_stranger_reply(
+        self,
+        *,
+        platform: str,
+        surface_installation_id: UUID | None,
+        sender_external_user_id: str | None,
+    ) -> bool:
+        """Whether a sender we cannot place may be told how to get access now.
+
+        True once per sender per window. Message-level claims stop redeliveries;
+        this stops repetition -- unsolicited messages from a shared number, and
+        the same public nudge every time one person speaks in a channel.
+        """
+        ...
 
     async def release_message(
         self,

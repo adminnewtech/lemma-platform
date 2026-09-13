@@ -1,6 +1,6 @@
 {
   "name": "lemma-sdk",
-  "version": "0.7.2",
+  "version": "0.8.0",
   "engines": {
     "node": ">=22"
   },
@@ -93,6 +93,6 @@
     "react-dom": "^19.2.4",
     "shadcn": "^4.2.0",
     "typescript": "^5.6.3",
-    "vitest": "^4.1.10"
+    "vitest": "^5.0.0"
   }
 }

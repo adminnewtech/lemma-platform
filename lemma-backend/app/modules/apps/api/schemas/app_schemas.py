@@ -91,20 +91,34 @@ class AppReleaseResponse(BaseModel):
         ),
     )
 
-    @computed_field(return_type=str)
+    @computed_field(return_type=str | None)
     @property
-    def preview_url(self) -> str:
+    def preview_url(self) -> str | None:
         # Through `public_app_url`, not a second copy of the scheme-and-domain
         # rule: a preview host is the live host with the release in its label,
         # so the two must never be able to disagree about the rest of it.
+        #
+        # None where no app host is served -- the same real state `public_app_url`
+        # documents, and the reason this is not annotated `str`. It was, and the
+        # schema then promised a string on exactly the stacks (Desktop, a tunnel)
+        # that send null, so the client believed it held a URL and previewed the
+        # live release while announcing a preview of an older one.
         return public_app_url(f"{self.app_public_slug}--r{self.release_number}")
 
     # Carried so `preview_url` can be computed without a second app lookup.
     app_public_slug: str = Field(exclude=True)
 
 
+#: The largest page this endpoint will serve. `PS-DATA-011` says publish a
+#: maximum and refuse a request for more rather than quietly returning fewer --
+#: so it is a named constant, it appears in the description, and `le=` enforces
+#: it at the boundary instead of being clamped in silence.
+MAX_RELEASE_PAGE_SIZE = 200
+
+
 class AppReleaseListResponse(BaseModel):
     items: list[AppReleaseResponse]
+    next_page_token: str | None = None
 
 
 class AppMessageResponse(BaseModel):

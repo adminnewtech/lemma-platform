@@ -192,3 +192,63 @@ def test_receipt_tiers_use_actual_input_and_start_only_above_threshold() -> None
     assert card.price(TokenCounts(input_tokens=101, output_tokens=10)) == Decimal(
         ".000262"
     )
+
+
+def test_a_price_that_is_not_the_gateway_s_own_cannot_enforce_a_budget() -> None:
+    """A resolved price and an enforceable one are different things.
+
+    An OpenAI-compatible gateway reselling somebody else's model resolves a
+    price for the *vendor* — DeepSeek's own rate for `deepseek-v4-flash`, not
+    what the gateway charges to serve it. Holding a budget to that number would
+    enforce a limit against a price the deployment does not pay, so the card
+    carries the rates and refuses to be enforceable. A deployment that wants
+    monetary limits here has to state its prices
+    (`LEMMA_SYSTEM_MODEL_METADATA_JSON`), which is the override path.
+    """
+    card = RateCard(
+        model="deepseek-v4-flash",
+        provider="deepseek",
+        enforceable=False,
+        rates={
+            "input_mtok": Rate(base=Decimal("0.14")),
+            "output_mtok": Rate(base=Decimal("0.28")),
+        },
+    )
+
+    assert card.rates, "a price was found"
+    assert not card.priceable, "but not one this deployment may enforce against"
+
+
+def test_a_chat_model_bills_an_image_at_its_ordinary_input_rate() -> None:
+    """Which is what makes an agent able to look at one under a budget.
+
+    The provider counts image input into `input_tokens`; only a card that
+    states an image rate of its own needs a split the receipt does not carry.
+    """
+    chat = resolve_rate_card(
+        {"provider_model_name": "gpt-5.1", "config": {"base_url": None}},
+        {},
+        datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+    assert chat.prices_images_as_text
+
+    separate = RateCard(
+        model="gpt-image-1",
+        enforceable=True,
+        rates={
+            "input_mtok": Rate(base=Decimal("1")),
+            "output_mtok": Rate(base=Decimal("1")),
+            "input_image_mtok": Rate(base=Decimal("10")),
+        },
+    )
+    assert not separate.prices_images_as_text
+
+
+def test_an_operator_stating_input_and_output_prices_has_priced_images() -> None:
+    card = resolve_rate_card(
+        {"model_name": "house-vision"},
+        {"house-vision": ModelPricing(3.0, 15.0)},
+        datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+    assert card.priceable
+    assert card.prices_images_as_text

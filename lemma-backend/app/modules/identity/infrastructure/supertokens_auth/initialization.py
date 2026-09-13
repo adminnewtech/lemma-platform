@@ -35,6 +35,9 @@ from app.modules.identity.infrastructure.supertokens_auth.override_email_verific
 from app.modules.identity.infrastructure.supertokens_auth.jwks_guard import (
     install_jwks_guard,
 )
+from app.modules.identity.infrastructure.supertokens_auth.querier_client import (
+    install_shared_querier_client,
+)
 from app.core.log.log import get_logger
 from app.modules.identity.config import identity_settings
 
@@ -75,16 +78,18 @@ def build_supertokens_app_info() -> InputAppInfo:
 def build_thirdparty_providers() -> list[ProviderInput]:
     providers: list[ProviderInput] = []
 
-    if settings.is_google_oauth_configured():
-        assert settings.google_client_id is not None
+    if identity_settings.is_google_oauth_configured():
+        assert identity_settings.google_client_id is not None
         providers.append(
             ProviderInput(
                 config=ProviderConfig(
                     third_party_id="google",
                     clients=[
                         ProviderClientConfig(
-                            client_id=settings.google_client_id,
-                            client_secret=reveal_secret(settings.google_client_secret),
+                            client_id=identity_settings.google_client_id,
+                            client_secret=reveal_secret(
+                                identity_settings.google_client_secret
+                            ),
                         ),
                     ],
                 ),
@@ -124,6 +129,8 @@ def build_thirdparty_providers() -> list[ProviderInput]:
 def initialize_supertokens():
     # Before init, so no verification can run against the unguarded function.
     install_jwks_guard()
+    # Likewise before init: the querier is what every verification goes through.
+    install_shared_querier_client()
     init(
         app_info=build_supertokens_app_info(),
         supertokens_config=SupertokensConfig(
