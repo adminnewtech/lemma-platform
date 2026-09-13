@@ -146,6 +146,43 @@ class ObstoreDatastoreStorage:
             )
             raise DatastoreInfrastructureError("Failed to delete file")
 
+    async def copy_prefix(self, source_prefix: str, destination_prefix: str) -> int:
+        """Copy every object under one prefix to another, and say how many.
+
+        Copy rather than move, and the difference is the whole point: the source
+        stays until somebody decides it is safe to drop it. A move here deleted
+        a renamed file's converted output before the row naming it had been
+        committed, so a persistence failure rolled the path back and left the
+        file readable with its artifacts gone.
+
+        Defined once on the obstore base, so every backend gets it: the listing
+        it needs is the same listing ``delete_prefix`` below already does.
+        """
+        sources: list[str] = []
+        try:
+            async for batch in self.store.list_async(prefix=source_prefix):
+                sources.extend(
+                    item["path"]
+                    for item in batch
+                    if isinstance(item, dict) and item.get("path")
+                )
+            if not sources:
+                return 0
+            for source in sources:
+                suffix = source[len(source_prefix) :].lstrip("/")
+                await obs.copy_async(
+                    self.store, source, f"{destination_prefix}{suffix}"
+                )
+            return len(sources)
+        except Exception as exc:
+            if self._is_missing_object_error(exc):
+                return 0
+            logger.debug(
+                "datastore.storage.copying_datastore_prefix_s.propagated",
+                exc_info=True,
+            )
+            raise DatastoreInfrastructureError("Failed to copy folder contents")
+
     async def delete_prefix(self, prefix: str) -> int:
         deleted_paths: list[str] = []
         try:

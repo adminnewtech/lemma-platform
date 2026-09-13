@@ -11849,16 +11849,22 @@ var LemmaClient = (() => {
      * List App Releases
      * @param podId
      * @param appName
+     * @param limit Max releases to return, up to 200. Page beyond that with `page_token`.
+     * @param pageToken `next_page_token` from the previous page.
      * @returns AppReleaseListResponse Successful Response
      * @throws ApiError
      */
-    static appReleaseList(podId, appName) {
+    static appReleaseList(podId, appName, limit = 50, pageToken) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/apps/{app_name}/releases",
         path: {
           "pod_id": podId,
           "app_name": appName
+        },
+        query: {
+          "limit": limit,
+          "page_token": pageToken
         },
         errors: {
           422: `Validation Error`
@@ -11953,9 +11959,30 @@ var LemmaClient = (() => {
         body: payload
       });
     }
-    /** This app's release history, newest first. */
-    releases(name) {
-      return this.client.request(() => AppsService.appReleaseList(this.podId(), name));
+    /** One page of this app's release history, newest first. */
+    releases(name, options) {
+      return this.client.request(
+        () => AppsService.appReleaseList(this.podId(), name, options == null ? void 0 : options.limit, options == null ? void 0 : options.pageToken)
+      );
+    }
+    /**
+     * Every release this app has had, newest first, paged to exhaustion.
+     *
+     * The endpoint answers a page now, and retention keeps a pruned release's row
+     * -- so an app deployed daily has history past the first page, and a live
+     * release can itself be on a later one. Anything that has to be complete
+     * wants this rather than `releases`.
+     */
+    async allReleases(name, pageSize = 200) {
+      var _a;
+      const items = [];
+      let pageToken;
+      for (; ; ) {
+        const page = await this.releases(name, { limit: pageSize, pageToken });
+        items.push(...(_a = page.items) != null ? _a : []);
+        pageToken = page.next_page_token;
+        if (typeof pageToken !== "string" || !pageToken) return items;
+      }
     }
     /**
      * Make an existing release the one this app serves. `releaseRef` is the
@@ -12270,11 +12297,11 @@ var LemmaClient = (() => {
      * @param podId
      * @param includeDead Also list links that have expired or been revoked.
      * @param limit Links per page.
-     * @param cursor `next_cursor` from the previous page.
+     * @param pageToken `next_page_token` from the previous page.
      * @returns SignedUrlListResponse Successful Response
      * @throws ApiError
      */
-    static fileSignedUrlList(podId, includeDead = false, limit = 100, cursor) {
+    static fileSignedUrlList(podId, includeDead = false, limit = 100, pageToken) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/datastore/files/signed-urls",
@@ -12284,7 +12311,7 @@ var LemmaClient = (() => {
         query: {
           "include_dead": includeDead,
           "limit": limit,
-          "cursor": cursor
+          "page_token": pageToken
         },
         errors: {
           422: `Validation Error`
@@ -12793,16 +12820,22 @@ var LemmaClient = (() => {
      * List the built revisions of a function, newest first.
      * @param podId
      * @param functionName
+     * @param limit Max revisions to return, up to 200. Page beyond that with `page_token`.
+     * @param pageToken `next_page_token` from the previous page.
      * @returns FunctionRevisionListResponse Successful Response
      * @throws ApiError
      */
-    static functionRevisionList(podId, functionName) {
+    static functionRevisionList(podId, functionName, limit = 50, pageToken) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/functions/{function_name}/revisions",
         path: {
           "pod_id": podId,
           "function_name": functionName
+        },
+        query: {
+          "limit": limit,
+          "page_token": pageToken
         },
         errors: {
           422: `Validation Error`
@@ -12941,8 +12974,27 @@ var LemmaClient = (() => {
         replace: (name, payload) => this.client.request(() => FunctionsService.functionPermissionsReplace(this.podId(), name, payload))
       });
       __publicField(this, "revisions", {
-        /** This function's built revisions, newest first. */
-        list: (name) => this.client.request(() => FunctionsService.functionRevisionList(this.podId(), name)),
+        /** One page of this function's built revisions, newest first. */
+        list: (name, options) => this.client.request(
+          () => FunctionsService.functionRevisionList(
+            this.podId(),
+            name,
+            options == null ? void 0 : options.limit,
+            options == null ? void 0 : options.pageToken
+          )
+        ),
+        /** Every revision, newest first, paged to exhaustion. See `apps.allReleases`. */
+        listAll: async (name, pageSize = 200) => {
+          var _a;
+          const items = [];
+          let pageToken;
+          for (; ; ) {
+            const page = await this.revisions.list(name, { limit: pageSize, pageToken });
+            items.push(...(_a = page.items) != null ? _a : []);
+            pageToken = page.next_page_token;
+            if (typeof pageToken !== "string" || !pageToken) return items;
+          }
+        },
         /** One revision, with its source and the schemas its code implements. */
         get: (name, revisionRef) => this.client.request(() => FunctionsService.functionRevisionGet(this.podId(), name, revisionRef)),
         /**

@@ -116,21 +116,27 @@ async def list_file_signed_urls(
         False, description="Also list links that have expired or been revoked."
     ),
     limit: int = Query(100, ge=1, le=200, description="Links per page."),
-    cursor: str | None = Query(
-        None, description="`next_cursor` from the previous page."
+    page_token: str | None = Query(
+        None, description="`next_page_token` from the previous page."
     ),
 ) -> SignedUrlListResponse:
-    before, before_id = _decode_cursor(cursor)
-    links = await file_service.list_signed_urls(
+    before, before_id = _decode_cursor(page_token)
+    # One more than the page, which is how the house contract tells a full page
+    # from a last page. Emitting a token whenever the page came back full costs
+    # every exhaustive consumer one guaranteed empty request, and on a "list the
+    # links so you can revoke them" endpoint an empty page is the answer people
+    # act on.
+    probed = await file_service.list_signed_urls(
         pod_id,
         ctx=ctx,
         include_dead=include_dead,
-        limit=limit,
+        limit=limit + 1,
         before=before,
         before_id=before_id,
     )
+    links = probed[:limit]
     return SignedUrlListResponse(
-        next_cursor=_encode_cursor(links[-1]) if len(links) == limit else None,
+        next_page_token=_encode_cursor(links[-1]) if len(probed) > limit else None,
         links=[
             SignedUrlSummary(
                 code=link.code,
