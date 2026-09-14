@@ -253,15 +253,17 @@ BACKEND_SLACK_SOCKET_MODE       ?= true
 # the EmailVerification recipe when this is false, while the frontend flag it
 # mirrors defaults to true -- so a local signup landed on /auth/verify-email and
 # called an API that was never mounted ("We couldn't reach the verification
-# service"). Deriving both from one value keeps them in step.
-DEV_AUTH_EMAIL_VERIFICATION_REQUIRED := false
-
+# service"). The backend value is a literal here because
+# `scripts/check_local_auth_gates.py` reads this list as text, and the frontend
+# flag is derived from it -- one value, and the gate that compares this list
+# against the local stack keeps working.
 DEV_LOCAL_AUTH_ENV := \
-	AUTH_EMAIL_VERIFICATION_REQUIRED=$(DEV_AUTH_EMAIL_VERIFICATION_REQUIRED) \
+	AUTH_EMAIL_VERIFICATION_REQUIRED=false \
 	AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED=false \
 	AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED=false \
 	AUTH_ABUSE_PROTECTION_ENABLED=false \
 	AUTH_ALTCHA_ENABLED=false
+DEV_AUTH_EMAIL_VERIFICATION_REQUIRED := $(patsubst AUTH_EMAIL_VERIFICATION_REQUIRED=%,%,$(filter AUTH_EMAIL_VERIFICATION_REQUIRED=%,$(DEV_LOCAL_AUTH_ENV)))
 DEV_LOCAL_AUTH_KEYS := $(foreach pair,$(DEV_LOCAL_AUTH_ENV),$(firstword $(subst =, ,$(pair))))
 
 BACKEND_DEV_ENV := \
