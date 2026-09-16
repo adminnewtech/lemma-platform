@@ -375,30 +375,33 @@ async def test_the_browser_starts_again_after_its_x_server_dies_uncleanly(
     assert "xvfb-up" in (again.stdout or ""), again
 
 
-#: Two pages, served from inside the sandbox, with the link in the right-hand
-#: fifth of the window.
+#: Two pages, served from inside the sandbox, with the link in a narrow strip
+#: down the right-hand edge of the window.
 #:
-#: Deliberately not a link that fills the viewport, which is what this started
-#: as. A full-window target is hit by any arithmetic at all, and the arithmetic
-#: is the part that was wrong. A frame carries two sizes: `metadata.deviceWidth`
-#: / `deviceHeight`, which is the page, and the JPEG's own pixels, which is the
-#: picture -- and they differ, measured, as 1280x720 against 985x800, because
-#: the stream encodes within the caps the image sets. Input goes in the
-#: *picture's* space, because the stream server scales it back out of the frame
-#: itself. Aiming with the page's numbers sends x=1242 at a picture 985 wide,
-#: which lands past its right edge and clicks nothing -- and a click that hits
-#: no element is indistinguishable from input that never arrived.
+#: The width of that strip is the whole point. A frame is a picture of a page
+#: and the two have different sizes -- measured, a 1050x797 page arrives as a
+#: 949x720 JPEG, because the stream encodes within the caps the image sets --
+#: and input is dispatched in the *page's* pixels. So a click has to be scaled
+#: back up out of the picture before it means anything, and getting that wrong
+#: moves it about a tenth of the way left.
+#:
+#: A tenth is absorbed by a wide target. This started as a link filling the
+#: window and then one filling its right-hand fifth, and both were hit by
+#: either arithmetic -- so the test went green through two shipped coordinate
+#: bugs and one revert. A strip a twentieth of the window wide is narrower than
+#: the error, which is the only property that makes this a test of the mapping
+#: rather than of the click.
 VIEW_SITE_PORT = 18077
 VIEW_SITE = f"http://127.0.0.1:{VIEW_SITE_PORT}"
 #: Where the link starts, as a fraction of the width.
-VIEW_LINK_FROM = 0.8
-#: Where the test clicks, as a fraction of the picture's width.
+VIEW_LINK_FROM = 0.95
+#: Where the test clicks, as a fraction of the page's width.
 VIEW_CLICK_AT = 0.97
 _VIEW_PAGES = """set -e
 mkdir -p /tmp/lemma-view-site
 cat > /tmp/lemma-view-site/index.html <<'HTML'
 <html><head><title>Watch me</title></head><body style="margin:0;background:#cde">
-<a href="/next.html" style="position:fixed;top:0;right:0;width:20vw;height:100vh;background:#9ab">right edge</a>
+<a href="/next.html" style="position:fixed;top:0;right:0;width:5vw;height:100vh;background:#9ab"></a>
 </body></html>
 HTML
 cat > /tmp/lemma-view-site/next.html <<'HTML'
@@ -562,26 +565,47 @@ async def test_a_person_watches_the_agents_browser_and_then_drives_it(
         assert refusal["code"] == "read_only", refusal
 
     async with websockets.connect(view_socket("control"), max_size=None) as driving:
+        # The page Chrome actually laid out, measured in the sandbox and sent
+        # on the relay's own attach message. **Not** the stream server's own
+        # `status`, which also carries a `viewportWidth`/`viewportHeight` and
+        # is a different number: it reports the viewport that was *asked for*.
+        # Measured here as 1280x720 requested against 1050x853 laid out, with
+        # the click landing in the second -- under Xvfb the window does not
+        # always take the size it is given. `metadata.deviceWidth` is a third
+        # number again, the cap box, and the JPEG's own size a fourth.
+        #
+        # So this reads the relay's message specifically, by its `state`.
+        while True:
+            attached = await _first(driving, "status")
+            if attached.get("state"):
+                break
+        page_width = int(attached.get("viewportWidth") or 0)
+        page_height = int(attached.get("viewportHeight") or 0)
+        assert page_width and page_height, attached
+
         first = await _first(driving, "frame")
         await driving.send(json.dumps({"type": "ack", "seq": first.get("seq")}))
-
-        page_width = int(first["metadata"]["deviceWidth"])
-        page_height = int(first["metadata"]["deviceHeight"])
         picture_width, picture_height = _jpeg_size(base64.b64decode(first["data"]))
         assert picture_width and picture_height
 
-        # In the picture's pixels, which is the only space input is ever in.
+        # In the page's pixels, which is the space the stream dispatches in.
         aimed = (
-            round(picture_width * VIEW_CLICK_AT),
-            round(picture_height / 2),
+            round(page_width * VIEW_CLICK_AT),
+            round(page_height / 2),
         )
-        assert aimed[0] >= picture_width * VIEW_LINK_FROM, aimed
-        # The same aim expressed against the page would be off the picture
-        # entirely. Asserted so that a future frame whose two sizes happen to
-        # agree says so, rather than passing while proving nothing.
-        assert page_width * VIEW_CLICK_AT > picture_width, (
+        assert aimed[0] >= page_width * VIEW_LINK_FROM, aimed
+        # Two guards, and between them they are what stops this going green
+        # while proving nothing -- which it did through two shipped coordinate
+        # bugs. The first says the two spaces are still different here. The
+        # second says the *old* answer, the same fraction of the picture, now
+        # falls short of the link, so getting the mapping wrong fails.
+        assert picture_width < page_width, (
             "the picture is no smaller than the page here, so this no longer "
             f"distinguishes the two spaces ({picture_width} vs {page_width})"
+        )
+        assert picture_width * VIEW_CLICK_AT < page_width * VIEW_LINK_FROM, (
+            "aiming in the picture's pixels would still hit the link, so this "
+            f"does not test the mapping ({picture_width} vs {page_width})"
         )
         for event in ("mousePressed", "mouseReleased"):
             await driving.send(
@@ -597,11 +621,19 @@ async def test_a_person_watches_the_agents_browser_and_then_drives_it(
                     }
                 )
             )
-        navigated = await _first(driving, "url")
-        assert navigated["url"].endswith("/next.html"), (
-            f"{navigated} -- aimed at {aimed} on a {page_width}x{page_height} page "
+        where = (
+            f"aimed at {aimed} on a {page_width}x{page_height} page "
             f"from a {picture_width}x{picture_height} picture"
         )
+        # The numbers, whichever way this fails. A bare `TimeoutError` here
+        # says only that the click did not navigate, which is the one thing
+        # already known -- and every coordinate bug in this feature has been
+        # diagnosed by comparing these four numbers.
+        try:
+            navigated = await _first(driving, "url")
+        except TimeoutError:
+            raise AssertionError(f"no navigation -- {where}")
+        assert navigated["url"].endswith("/next.html"), f"{navigated} -- {where}"
 
 
 async def test_an_agent_can_record_the_browser_and_get_a_playable_file(

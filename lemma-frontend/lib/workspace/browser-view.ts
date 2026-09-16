@@ -28,21 +28,51 @@ export type ViewerState =
 
 export interface ViewerFrame {
     /**
-     * The picture's own pixels. Three things are in this space and nothing is
-     * in any other: the canvas, the hit-testing, and the coordinates of every
-     * input message sent back.
+     * The picture's own pixels: what the canvas is sized to and what the
+     * hit-testing is done against, because the picture is what is on screen.
      *
-     * Not the size of the page. A frame carries `metadata.deviceWidth` /
-     * `deviceHeight` as well, and they are a different pair of numbers --
-     * measured, a 1280x720 device arrives as a 985x800 JPEG, because the stream
-     * encodes within the caps the image sets (`AGENT_BROWSER_STREAM_MAX_WIDTH`
-     * / `_MAX_HEIGHT`). The stream server scales input back out of the frame's
-     * space itself, so sending it page coordinates puts the pointer off the
-     * right of the picture and nothing is clicked at all. That metadata is not
-     * used here, and this comment is why.
+     * Not what input is sent in. See `viewportWidth`.
      */
     pictureWidth: number;
     pictureHeight: number;
+    /**
+     * The page's own CSS pixels, measured in the sandbox and sent on the
+     * relay's attach message, and the space every input message must be in.
+     *
+     * The two differ: the stream encodes within the caps the image sets
+     * (`AGENT_BROWSER_STREAM_MAX_WIDTH` / `_MAX_HEIGHT`), so a 1050x797 page
+     * arrives as a 949x720 JPEG. Settled by experiment rather than by reading:
+     * a 44x22 button at page (800,700) in a real sandbox, clicked through the
+     * stream socket twice. Page coordinates (822,711) set the title; picture
+     * coordinates (743,642) did nothing. Every click was landing about a tenth
+     * of the way up and to the left -- which large targets absorb and small
+     * ones do not, so it presented as "clicks sometimes work" rather than as a
+     * broken mapping.
+     *
+     * Note the stream server sends a `viewportWidth`/`viewportHeight` of its
+     * own and it is **not** this number: it reports the viewport that was
+     * *asked for*, not the one Chrome laid out. Measured in one sandbox --
+     * requested 1280x720, actually laid out 1050x853, and a click lands in the
+     * second. Under Xvfb the window cannot always take the size it is given
+     * and the two diverge silently. `agent-browser`'s own dashboard maps into
+     * the requested one, so it has this bug too; it only shows when they
+     * disagree.
+     *
+     * `0` before the relay has measured, or from an image that predates the
+     * measurement, which leaves input in the picture's pixels -- wrong by the
+     * scale factor, but no worse than before.
+     */
+    viewportWidth: number;
+    viewportHeight: number;
+    /**
+     * `metadata.deviceWidth` / `deviceHeight`, kept because it is on the wire
+     * and useful in a bug report -- and *not* the input space, which took
+     * three goes to establish. It is the cap box echoed back: in one sandbox
+     * 1280x720 against a 949x720 picture of a 1050x797 page, where the aspect
+     * ratios do not even match, so no single scale can relate the two.
+     */
+    deviceWidth: number;
+    deviceHeight: number;
     bitmap: HTMLImageElement;
 }
 
@@ -71,21 +101,33 @@ const NON_TEXT_KEYS = new Set([
  * box is therefore not the picture's box. Mapping against the element is the
  * bug that made every click land near, but not on, what was aimed at.
  *
- * The result is in the picture's pixels, which is what the stream server
- * expects: it knows how it scaled the frame and scales input back the same way.
- * Sending the page's coordinates instead — which the frame's metadata also
- * carries, and which are larger — puts the pointer past the picture's right
- * edge, where it hits nothing. That failed silently: a click that lands on no
- * element looks exactly like input that never arrived.
+ * The result is in the *page's* pixels, because that is what the stream server
+ * dispatches: it does not scale input back out of the picture's space. The
+ * page's size arrives on the relay's attach message — it cannot be inferred
+ * from a frame, and four coordinate bugs came of trying.
+ *
+ * With no measurement, this falls back to the picture's own pixels. That is
+ * wrong by the scale factor and is what the pane did before the relay was
+ * asked; it fails silently, because a click that lands on no element looks
+ * exactly like input that never arrived.
  */
 export const toFramePoint = (
     rect: { left: number; top: number; width: number; height: number },
-    frame: { pictureWidth: number; pictureHeight: number },
+    frame: {
+        pictureWidth: number;
+        pictureHeight: number;
+        viewportWidth?: number;
+        viewportHeight?: number;
+    },
     event: { clientX: number; clientY: number },
 ): { x: number; y: number } => {
     if (!rect.width || !rect.height || !frame.pictureWidth || !frame.pictureHeight) {
         return { x: 0, y: 0 };
     }
+    // Two spaces, and the whole of this function is the conversion between
+    // them. Hit-testing is against the *picture*, because that is what is drawn
+    // and what the person is aiming at. The answer is in *page* pixels, because
+    // that is what the stream server dispatches.
     const scale = Math.min(
         rect.width / frame.pictureWidth,
         rect.height / frame.pictureHeight,
@@ -95,11 +137,23 @@ export const toFramePoint = (
     const offsetX = (rect.width - drawnWidth) / 2;
     const offsetY = (rect.height - drawnHeight) / 2;
 
-    const x = (event.clientX - rect.left - offsetX) / scale;
-    const y = (event.clientY - rect.top - offsetY) / scale;
+    // Where in the drawn picture, as a fraction. Going through a fraction
+    // rather than through picture pixels means the picture's size drops out
+    // entirely, which is the point: it is a display detail and input never
+    // depended on it.
+    const across = (event.clientX - rect.left - offsetX) / drawnWidth;
+    const down = (event.clientY - rect.top - offsetY) / drawnHeight;
+
+    // The page, when the sandbox managed to measure it; the picture otherwise.
+    // Note that both fall out of the *fraction* above, so the picture's size
+    // never enters the answer except as that fallback -- which is the shape
+    // that makes this checkable: one number in, one number out, and the only
+    // question is which space it is in.
+    const width = frame.viewportWidth || frame.pictureWidth;
+    const height = frame.viewportHeight || frame.pictureHeight;
     return {
-        x: Math.max(0, Math.min(frame.pictureWidth, Math.round(x))),
-        y: Math.max(0, Math.min(frame.pictureHeight, Math.round(y))),
+        x: Math.max(0, Math.min(width, Math.round(across * width))),
+        y: Math.max(0, Math.min(height, Math.round(down * height))),
     };
 };
 
@@ -164,6 +218,47 @@ export const keyEventFor = (event: {
         modifiers: modifiersOf(event),
     };
 };
+
+/**
+ * A mouse event as the page needs to receive it.
+ *
+ * Built here rather than inline in the pane so it is one object with one set of
+ * rules, and so those rules are testable. Three of them were learned the hard
+ * way:
+ *
+ * `buttons` is the DOM's own bitmask, which is already exactly the CDP
+ * contract: which buttons are held *now*, as opposed to `button`, which is what
+ * this event is about. Both hand-written answers were wrong in opposite
+ * directions — a constant 1 said the button was still down on release, so the
+ * page saw a press that never ended and a cookie banner's Allow took focus and
+ * did nothing; then 1-on-press-only reported no button held during a move,
+ * which is a drag reported as a hover.
+ *
+ * `clickCount` is the DOM's `detail`, so a double-click arrives as one. Zero on
+ * a move, because a move is not a click.
+ *
+ * `modifiers` for the same reason the keyboard sends them: without it a
+ * ctrl-click or shift-click is an ordinary click, so "open in new tab" and
+ * range-select silently do the wrong thing. The keyboard and wheel paths
+ * carried this from the start and the mouse path did not.
+ */
+export const mouseEventFor = (
+    type: 'mousePressed' | 'mouseReleased' | 'mouseMoved',
+    point: { x: number; y: number },
+    event: {
+        button: number; buttons: number; detail?: number;
+        altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean;
+    },
+): Record<string, unknown> => ({
+    type: 'input_mouse',
+    eventType: type,
+    x: point.x,
+    y: point.y,
+    button: ['left', 'middle', 'right'][event.button] ?? 'left',
+    buttons: event.buttons,
+    clickCount: type === 'mouseMoved' ? 0 : event.detail || 1,
+    modifiers: modifiersOf(event),
+});
 
 /**
  * A wheel event, in the sign convention Chrome expects.
@@ -241,6 +336,11 @@ export function openBrowserView(options: ViewerOptions): ViewerHandle {
     let attempt = 0;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let latest: Omit<ViewerFrame, 'bitmap'> | null = null;
+    //: The page's own pixels, from the relay's attach message. Connection-level
+    //: rather than per-frame because that is where it arrives, and reset on
+    //: every connect so a reconnect to a differently-sized page does not keep
+    //: the old one.
+    let viewport = { width: 0, height: 0 };
 
     const send = (message: Record<string, unknown>) => {
         if (socket && socket.readyState === WebSocket.OPEN) {
@@ -250,6 +350,7 @@ export function openBrowserView(options: ViewerOptions): ViewerHandle {
 
     const connect = () => {
         if (closed) return;
+        viewport = { width: 0, height: 0 };
         options.onState('connecting');
         socket = new WebSocket(
             viewSocketUrl({
@@ -283,9 +384,17 @@ export function openBrowserView(options: ViewerOptions): ViewerHandle {
                 send({ type: 'ack', seq: message.seq });
                 const bitmap = new Image();
                 bitmap.onload = () => {
+                    const metadata = (message.metadata || {}) as Record<
+                        string,
+                        unknown
+                    >;
                     latest = {
                         pictureWidth: bitmap.naturalWidth || bitmap.width,
                         pictureHeight: bitmap.naturalHeight || bitmap.height,
+                        viewportWidth: viewport.width,
+                        viewportHeight: viewport.height,
+                        deviceWidth: Number(metadata.deviceWidth) || 0,
+                        deviceHeight: Number(metadata.deviceHeight) || 0,
                     };
                     options.onFrame({ ...latest, bitmap });
                     // Live when there is a picture, not when there is a socket.
@@ -302,6 +411,24 @@ export function openBrowserView(options: ViewerOptions): ViewerHandle {
                 // Not a picture, so not yet "live" — but proof the connection
                 // works, which is what the backoff counts.
                 attempt = 0;
+                // And the one thing a frame cannot tell us: the size of the
+                // page the picture is of, which is the space input goes in.
+                //
+                // **Only from the relay's own status**, which is what `state`
+                // identifies. The stream server sends a `status` carrying
+                // `viewportWidth`/`viewportHeight` too, and taking that one is
+                // a bug: it reports the viewport that was *asked for*, and
+                // under Xvfb the window does not always get it. Measured in
+                // one sandbox as 1280x720 asked for against 1050x853 laid out,
+                // with the click landing in the second — so the stream's own
+                // numbers would put every click a fifth of the way past the
+                // right edge, onto nothing.
+                if (typeof message.state === 'string') {
+                    viewport = {
+                        width: Number(message.viewportWidth) || 0,
+                        height: Number(message.viewportHeight) || 0,
+                    };
+                }
                 return;
             }
             if (message.type === 'url' && options.onNavigated) {

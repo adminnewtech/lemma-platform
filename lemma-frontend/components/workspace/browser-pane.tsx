@@ -13,6 +13,7 @@ import {
     keyEventFor,
     openBrowserView,
     textAsCharEvents,
+    mouseEventFor,
     toFramePoint,
     wheelEventFor,
 } from '@/lib/workspace/browser-view';
@@ -113,18 +114,7 @@ export function BrowserPane({
         (type: 'mousePressed' | 'mouseReleased' | 'mouseMoved') =>
             (event: React.MouseEvent<HTMLCanvasElement>) => {
                 if (!controlling) return;
-                const point = pointFor(event);
-                sendInput({
-                    type: 'input_mouse',
-                    eventType: type,
-                    x: point.x,
-                    y: point.y,
-                    button: ['left', 'middle', 'right'][event.button] ?? 'left',
-                    // A hover is not a drag. Reporting a held button on every
-                    // move made pages with sliders and canvases think one was.
-                    buttons: type === 'mouseMoved' ? 0 : 1,
-                    clickCount: type === 'mouseMoved' ? 0 : event.detail || 1,
-                });
+                sendInput(mouseEventFor(type, pointFor(event), event));
             },
         [controlling, pointFor, sendInput],
     );
@@ -226,12 +216,40 @@ export function BrowserPane({
                             keyboardIsHere &&
                             'ring-2 ring-[var(--action-primary)] ring-inset',
                     )}
+                    // Capture belongs on `pointerdown`, not `mousedown`. A
+                    // `MouseEvent` has no `pointerId` at all, so calling
+                    // `setPointerCapture` from the mouse handler passes
+                    // `undefined` and throws `NotFoundError` -- which, being
+                    // ahead of the send, took the press down with it. The
+                    // first version of this fix could not click at all.
+                    //
+                    // `pointerdown` fires first, so the capture is in place by
+                    // the time the press is sent. What it buys: the page hears
+                    // the whole of the press, including the part outside this
+                    // element. Without it a drag off the canvas -- past the
+                    // edge of a banner, out of a dropdown, or a sloppy click
+                    // near the bezel -- delivers a press with no release, and
+                    // the page goes on believing the button is held, so the
+                    // next click extends a selection instead of pressing
+                    // anything. That is the shape of "the popup will not go
+                    // away".
+                    onPointerDown={(event) => {
+                        if (!controlling) return;
+                        event.currentTarget.setPointerCapture?.(event.pointerId);
+                    }}
                     onMouseDown={(event) => {
                         canvasRef.current?.focus();
                         onMouse('mousePressed')(event);
                     }}
                     onMouseUp={onMouse('mouseReleased')}
                     onMouseMove={onMouse('mouseMoved')}
+                    onContextMenu={(event) => {
+                        // The press and release already went to the page, which
+                        // draws its own menu inside the picture. Letting this
+                        // through as well opens *this* browser's menu on top of
+                        // the canvas, over a menu the person cannot reach.
+                        if (controlling) event.preventDefault();
+                    }}
                     onWheel={onWheel}
                     onKeyDown={onKey}
                     onKeyUp={onKey}

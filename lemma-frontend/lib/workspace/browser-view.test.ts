@@ -16,6 +16,7 @@ import {
     keyEventFor,
     reconnectDelayMs,
     textAsCharEvents,
+    mouseEventFor,
     toFramePoint,
     wheelEventFor,
 } from './browser-view';
@@ -84,22 +85,97 @@ describe('mapping a click onto the page', () => {
         });
     });
 
-    it('stays in the picture, which is not the size of the page', () => {
-        // Measured: a 1280x720 device arrives as a 985x800 JPEG, because the
-        // stream encodes within the caps the image sets. The stream server
-        // scales input back out of the *frame's* space, so this must answer in
-        // the picture's pixels -- answering in the page's put the pointer past
-        // the right edge of the picture, where it clicked nothing at all, which
-        // is indistinguishable from input never arriving.
-        const shrunk = { pictureWidth: 985, pictureHeight: 800 };
-        const rect = { left: 0, top: 0, width: 985, height: 800 };
-        expect(toFramePoint(rect, shrunk, { clientX: 955, clientY: 400 })).toEqual({
-            x: 955,
-            y: 400,
+    it('answers in the page, not in the picture it is drawn from', () => {
+        // The measurement this whole mapping comes from. A 1050x797 page
+        // arrives as a 949x720 JPEG, and a 44x22 button at page (800,700) was
+        // clicked through a real stream socket twice: page coordinates
+        // (822,711) set the title, picture coordinates (743,642) did nothing.
+        //
+        // So aiming at the button *in the picture* -- which is what a person
+        // does, because the picture is what is on screen -- has to come out as
+        // the page coordinates that hit it. Off by a tenth is what large
+        // targets absorb and small ones do not, which is why this presented as
+        // "clicks sometimes work".
+        const shrunk = {
+            pictureWidth: 949,
+            pictureHeight: 720,
+            viewportWidth: 1050,
+            viewportHeight: 797,
+        };
+        const rect = { left: 0, top: 0, width: 949, height: 720 };
+        expect(toFramePoint(rect, shrunk, { clientX: 743, clientY: 642 })).toEqual({
+            x: 822,
+            y: 711,
         });
+        // And the far corner is the page's corner, not the picture's.
+        expect(toFramePoint(rect, shrunk, { clientX: 9999, clientY: 9999 })).toEqual({
+            x: 1050,
+            y: 797,
+        });
+    });
+
+    it('falls back to the picture when the sandbox could not measure', () => {
+        // An image built before the relay reported its viewport sends no
+        // measurement, and every frame carries 0. Clicks are then off by the
+        // scale factor -- exactly as they were -- rather than multiplied by
+        // zero, which would put every one of them in the top-left corner.
+        const unmeasured = {
+            pictureWidth: 949,
+            pictureHeight: 720,
+            viewportWidth: 0,
+            viewportHeight: 0,
+        };
+        const rect = { left: 0, top: 0, width: 949, height: 720 };
+        expect(toFramePoint(rect, unmeasured, { clientX: 743, clientY: 642 })).toEqual({
+            x: 743,
+            y: 642,
+        });
+    });
+});
+
+describe('mouse', () => {
+    const at = { x: 100, y: 200 };
+    const plain = {
+        button: 0, buttons: 1, detail: 1,
+        altKey: false, ctrlKey: false, metaKey: false, shiftKey: false,
+    };
+
+    it('carries the held-button bitmask rather than inferring one', () => {
+        // A drag is a move with the button still down. Reporting 0 there makes
+        // it a hover: no text selection, no slider, no drag-and-drop. Reporting
+        // 1 on the release makes it a press that never ends.
+        expect(mouseEventFor('mouseMoved', at, { ...plain, buttons: 1 }).buttons).toBe(1);
         expect(
-            toFramePoint(rect, shrunk, { clientX: 9999, clientY: 9999 }).x,
-        ).toBe(985);
+            mouseEventFor('mouseReleased', at, { ...plain, buttons: 0 }).buttons,
+        ).toBe(0);
+    });
+
+    it('sends modifiers, so a ctrl-click is not an ordinary click', () => {
+        // The keyboard and wheel paths carried these from the start and the
+        // mouse path did not, so every shift-click was a plain click: no range
+        // select, and "open in new tab" opened in this one.
+        const held = mouseEventFor('mousePressed', at, {
+            ...plain, ctrlKey: true, shiftKey: true,
+        });
+        expect(held.modifiers).toBe(2 | 8);
+        expect(mouseEventFor('mousePressed', at, plain).modifiers).toBe(0);
+    });
+
+    it('passes a double-click through as one, and a move as no click at all', () => {
+        expect(
+            mouseEventFor('mousePressed', at, { ...plain, detail: 2 }).clickCount,
+        ).toBe(2);
+        expect(mouseEventFor('mouseMoved', at, plain).clickCount).toBe(0);
+    });
+
+    it('names the button the event is about', () => {
+        expect(mouseEventFor('mousePressed', at, { ...plain, button: 2 }).button).toBe(
+            'right',
+        );
+        // Anything the DOM invents is a left click rather than a crash.
+        expect(mouseEventFor('mousePressed', at, { ...plain, button: 9 }).button).toBe(
+            'left',
+        );
     });
 });
 
