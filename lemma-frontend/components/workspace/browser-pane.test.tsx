@@ -129,13 +129,44 @@ describe('opening the view', () => {
         expect(rfb.url).toContain('origin=https%3A%2F%2Fexample.com');
     });
 
-    it('names no conversation or session', async () => {
-        // VNC shows the sandbox's whole shared display, not a session-scoped
-        // tab -- there is nothing left for either of those to select.
-        render(<BrowserPane origin="https://example.com" />);
+    it('names no conversation or session when an origin steers a sign-in', async () => {
+        // A sign-in names its own session; the conversation the pane happens
+        // to be open in, if any, is not it.
+        render(<BrowserPane origin="https://example.com" conversationId="conv-abc" />);
         const rfb = await connect();
         expect(rfb.url).not.toContain('conversation=');
         expect(rfb.url).not.toContain('session=');
+    });
+
+    it('carries the conversation for a plain watch/drive, with no origin', async () => {
+        // `run_browser_script` runs every agent browser command in a session
+        // named for the conversation, not the shared default -- without this,
+        // the pane checked the wrong session and refused forever with "no
+        // browser running" while the agent's browser was live the whole time.
+        render(<BrowserPane conversationId="conv-abc" />);
+        const rfb = await connect();
+        expect(rfb.url).toContain('conversation=conv-abc');
+    });
+
+    it('reconnects to the new conversation when the mounted pane is handed a different one', async () => {
+        // `ComputerPanel` is one long-lived instance reused across whichever
+        // conversation is open -- the id is a prop, not a mount key -- so
+        // switching conversations re-runs this effect on the same component
+        // rather than making a fresh one. Without `conversationId` in the
+        // effect's dependency array, the first conversation's socket would
+        // stay open and a person switching conversations would keep watching
+        // the old one's browser.
+        const { rerender } = render(<BrowserPane conversationId="conv-first" />);
+        const first = await connect();
+        expect(first.url).toContain('conversation=conv-first');
+        expect(first.disconnected).toBe(false);
+
+        rerender(<BrowserPane conversationId="conv-second" />);
+        await waitFor(() => expect(first.disconnected).toBe(true));
+        await waitFor(() => expect(rfbInstances).toHaveLength(2));
+        const second = rfbInstances[1];
+        expect(second.url).toContain('conversation=conv-second');
+        expect(second.url).not.toContain('conv-first');
     });
 });
 
