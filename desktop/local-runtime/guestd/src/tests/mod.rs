@@ -1,5 +1,6 @@
 //! The guest's guards, grouped the way the code they cover is grouped.
 
+mod app_health;
 mod clock;
 mod concurrency;
 mod core_data;
@@ -168,6 +169,11 @@ pub(super) struct FakeEngine {
 }
 
 impl FakeEngine {
+    /// Every argv this engine was asked to run, for tests that care how often.
+    pub(super) fn commands(&self) -> Vec<Vec<String>> {
+        self.commands.lock().unwrap().clone()
+    }
+
     fn new(outputs: Vec<Output>) -> Self {
         Self {
             commands: Mutex::new(Vec::new()),

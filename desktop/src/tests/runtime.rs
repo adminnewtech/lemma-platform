@@ -13,7 +13,7 @@ fn no_lock_is_held_across_the_runtime_install() {
         .find("ensure_runtime_artifacts(app)")
         .expect("ensure_locald installs the runtime");
     let connect = body
-        .find("locald_connect.lock()")
+        .find("locald_connect.lock_or_recover()")
         .expect("ensure_locald takes the connect guard");
     assert!(
         install < connect,
@@ -21,7 +21,7 @@ fn no_lock_is_held_across_the_runtime_install() {
          not inside it"
     );
     assert!(
-        body.contains("runtime_install.lock()"),
+        body.contains("runtime_install.lock_or_recover()"),
         "the install still needs its own single-flight so two callers cannot \
          download at once"
     );
@@ -98,21 +98,27 @@ fn nothing_in_setup_installs_the_runtime_on_the_main_thread() {
     //
     // Both launch paths, resume and cold start, must hand that to a worker.
     let source = shell_source();
-    let setup = {
-        let start = source.find(".setup(move |app| {").expect("setup exists");
-        let end = source[start..]
-            .find("\n        .build(")
-            .or_else(|| source[start..].find("\n        .run("))
-            .map_or(source.len(), |offset| start + offset);
-        &source[start..end]
-    };
-    for (index, _) in setup.match_indices("ensure_locald(&handle)") {
-        let preceding = &setup[..index];
-        let spawned = preceding.rfind("std::thread::spawn");
-        let closed = preceding.rfind("});");
+    let setup = function_body(&source, "fn setup(\n    app: &mut tauri::App");
+    for slow in ["ensure_locald(", "start_impl("] {
         assert!(
-            spawned.is_some() && spawned > closed,
-            "an ensure_locald in setup is not inside a spawned thread"
+            !setup.contains(slow),
+            "setup calls {slow} itself instead of handing it to a worker"
+        );
+    }
+    // The two launch paths are the functions that do; each is only ever
+    // entered as the body of a spawned thread.
+    for worker in ["reconnect_after_resume(", "connect_on_launch("] {
+        let line = setup
+            .lines()
+            .find(|line| line.contains(worker))
+            .unwrap_or_else(|| panic!("setup no longer starts {worker}"));
+        assert!(
+            line.contains("std::thread::spawn(move ||"),
+            "{worker} must run on a spawned thread, not in setup: {line}"
+        );
+        assert!(
+            function_body(&source, &format!("fn {worker}")).contains("ensure_locald(handle)"),
+            "{worker} is the path that connects to the daemon"
         );
     }
 }
@@ -429,7 +435,7 @@ fn unpublished_online_runtime_error_is_actionable_and_logged_in_app() {
     assert!(!message.contains("Publish"), "{message}");
     assert!(!message.contains("PR test DMG"), "{message}");
 
-    let splash = include_str!("../../ui/index.html").replace("\r\n", "\n");
+    let splash = SPLASH.replace("\r\n", "\n");
     assert!(splash.contains("diagnosticLogs: (source, cursor = null)"));
     assert!(splash.contains("refreshDiagnosticLog"));
     assert!(splash.contains("id=\"log-tabs\""));
