@@ -332,10 +332,27 @@ export function BrowserPane({
         // "still opening" until the next tick, which is the whole interval.
         // Cleared and re-asked in the same breath.
         setPageUrl(null);
+        // Which poll is the current one. Two can be in flight at once -- the
+        // interval's and the one `visibilitychange` starts -- and they can
+        // land out of order, so the `cancelled` check alone is not enough:
+        // an answer from before the window was hidden could overwrite the one
+        // fetched on the way back. On the sign-in page what it would overwrite
+        // is the anti-phishing host label, which is the single worst thing
+        // here to show stale.
+        let latest = 0;
         const poll = async () => {
+            // Not while nothing is on screen to read the answer. The interval
+            // runs for as long as the pane is mounted, and each tick is a
+            // sandbox round trip -- on Desktop, one through the guest's single
+            // vsock control channel, which every other sandbox operation on
+            // the machine is queued behind. A window sent to the tray went on
+            // paying for it every 1.5 seconds. `visibilitychange` re-polls
+            // immediately below, so coming back is not a wait.
+            if (typeof document !== 'undefined' && document.hidden) return;
+            const request = ++latest;
             try {
                 const found = await getLemmaClient().workspace.browserCurrentPageUrl(origin);
-                if (cancelled || !found.url) return;
+                if (cancelled || request !== latest || !found.url) return;
                 setPageUrl(found.url);
                 onNavigated?.(found.url);
             } catch {
@@ -344,10 +361,19 @@ export function BrowserPane({
             }
         };
         const interval = setInterval(poll, NAVIGATION_POLL_MS);
+        // So the host label is current the moment somebody looks again, rather
+        // than up to one interval stale -- which on the sign-in page is the
+        // anti-phishing display, and is the one place a stale answer is worse
+        // than no answer.
+        const onVisible = () => {
+            if (!document.hidden) void poll();
+        };
+        document.addEventListener('visibilitychange', onVisible);
         poll();
         return () => {
             cancelled = true;
             clearInterval(interval);
+            document.removeEventListener('visibilitychange', onVisible);
         };
     }, [onNavigated, origin, reconnectNonce]);
 
