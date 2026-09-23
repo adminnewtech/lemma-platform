@@ -7,12 +7,9 @@ private let version = "0.1.0"
 
 /// One line of `vz.log`, stamped.
 ///
-/// Every line here used to be a bare `fputs`, so the whole file was a wall of
-/// undated messages. When a workspace stopped answering and the backend spent
-/// five minutes timing out, `vz.log` held the transport resets that happened
-/// during it -- and there was no way to tell whether they came before, during
-/// or after, because nothing in the file said when anything happened. A log
-/// kept for diagnosis that cannot be correlated with anything is not one.
+/// Stamped so a transport reset in `vz.log` can be lined up against the
+/// backend's own logs; an undated line cannot be placed before, during or after
+/// the failure it might explain.
 private func vzLog(_ message: String) {
     var now = timeval()
     gettimeofday(&now, nil)
@@ -27,6 +24,8 @@ private func vzLog(_ message: String) {
 }
 
 private let guestPort: UInt32 = 42_411
+/// guestd's sandbox tunnel. See `sandbox_tunnel` in lemma-guestd.
+private let sandboxTunnelPort: UInt32 = 42_412
 private let maxRequestBytes = 1_048_576
 private let maxResponseBytes = 4_194_304
 
@@ -464,7 +463,12 @@ private func serve(arguments: [String]) throws -> Never {
                 exit(EXIT_FAILURE)
             }
             do {
-                for port: UInt32 in [5432, 6379, 3567] {
+                // Postgres, Redis and SuperTokens, and the sandbox tunnel: every
+                // stream the host opens into the guest arrives this way rather
+                // than over the guest's network address, which macOS gates
+                // behind a Local Network permission a background process
+                // cannot be prompted for.
+                for port: UInt32 in [5432, 6379, 3567, sandboxTunnelPort] {
                     let service = try ServiceBridge(
                         path: socketParent.appendingPathComponent("service-\(port).sock").path
                     ) { completed in

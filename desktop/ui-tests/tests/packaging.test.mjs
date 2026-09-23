@@ -6,7 +6,8 @@ test('Tauri web assets exclude the test harness and package dependencies', async
   const desktop = new URL('../../', import.meta.url);
   const config = JSON.parse(await readFile(new URL('tauri.conf.json', desktop), 'utf8'));
   const assets = new URL(`${config.build.frontendDist}/`, desktop);
-  const entries = await readdir(assets, { recursive: true });
+  // Forward slashes on every platform: Windows lists `control\\core.js`.
+  const entries = (await readdir(assets, { recursive: true })).map((entry) => entry.replaceAll('\\', '/'));
   const forbidden = entries.filter((entry) =>
     /(^|[/\\])(node_modules|package(?:-lock)?\.json|tests)([/\\]|$)/.test(entry));
   assert.deepEqual(forbidden, [], 'Tauri bundles this directory; test dependencies must stay outside it');
@@ -16,6 +17,14 @@ test('Tauri web assets exclude the test harness and package dependencies', async
     'confirmation.html', 'confirmation.js', 'confirmation.css',
   ]) {
     assert.ok(entries.includes(page), `missing shipped asset: ${page}`);
+  }
+  // Every module the settings page imports, read from the page itself so a new
+  // module cannot be forgotten here.
+  const control = await readFile(new URL('control.js', assets), 'utf8');
+  const imported = [...control.matchAll(/from "\.\/(control\/[\w-]+\.js)"/g)].map((match) => match[1]);
+  assert.ok(imported.length > 0, 'control.js imports its modules');
+  for (const module of imported) {
+    assert.ok(entries.includes(module), `missing shipped module: ${module}`);
   }
 });
 
